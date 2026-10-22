@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# SSL & Credentials
+nginx/certs/*.key
+nginx/certs/*.crt
+nginx/certs/*.pem
+!nginx/certs/.gitkeep
+nginx/auth/.htpasswd
+
+# Database data & logs
+postgres/data/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker volume mounts local
+pgdata/
+loki-data/
+prometheus-data/
+grafana-data/

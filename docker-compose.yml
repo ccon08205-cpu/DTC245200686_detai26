@@ -1,0 +1,134 @@
+# ==============================================================================
+# Docker Compose Orchestration - Đề 26: Hệ thống Quản lý Sự kiện
+# Kiến trúc 2 mạng phân tách (app & edge), Non-root Nginx & Node, SSL Termination
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. Cơ sở dữ liệu PostgreSQL 17 (Chỉ nằm trên mạng nội bộ 'app')
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: eventify_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eventdb}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB_USER: ${APP_DB_USER:-event_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      EXPORTER_DB_USER: ${EXPORTER_DB_USER:-event_exporter}
+      EXPORTER_DB_PASSWORD: ${EXPORTER_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------------------
+  # 2. Dịch vụ Backend (Node.js Express TypeScript, Multi-stage, Non-root)
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: eventify_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-eventdb}
+      APP_DB_USER: ${APP_DB_USER:-event_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:-jwt_secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app
+      - edge
+
+  # ----------------------------------------------------------------------------
+  # 3. Dịch vụ Frontend (React Vite + Nginx Unprivileged Alpine)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: eventify_frontend
+    restart: unless-stopped
+    networks:
+      - edge
+
+  # ----------------------------------------------------------------------------
+  # 4. Quản trị Cơ sở dữ liệu pgAdmin 4
+  # ----------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: eventify_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@eventify26.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-AdminPass123!}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_LISTEN_PORT: 80
+    volumes:
+      - ./postgres/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app
+      - edge
+
+  # ----------------------------------------------------------------------------
+  # 5. Reverse Proxy & SSL Termination Nginx (Non-root user UID 101)
+  # ----------------------------------------------------------------------------
+  nginx:
+    image: nginxinc/nginx-unprivileged:alpine
+    container_name: eventify_nginx
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+      - frontend
+      - pgadmin
+    networks:
+      - edge
+
+# ==============================================================================
+# Phân chia Network & Volumes
+# ==============================================================================
+networks:
+  # Mạng ingress bên ngoài cho Nginx tiếp nhận và định tuyến tới Frontend/Backend/pgAdmin
+  edge:
+    name: eventify_edge
+    driver: bridge
+
+  # Mạng nội bộ cách ly an toàn cho PostgreSQL và Backend kết nối trực tiếp
+  app:
+    name: eventify_app
+    driver: bridge
+    internal: true
+
+volumes:
+  pgdata:
+    name: eventify_pgdata
+  pgadmin_data:
+    name: eventify_pgadmin_data

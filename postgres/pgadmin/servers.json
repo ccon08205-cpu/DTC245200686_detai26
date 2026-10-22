@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Eventify26 PostgreSQL Database",
+      "Group": "Event Management Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "eventdb",
+      "Username": "postgres",
+      "SSLMode": "prefer"
+    }
+  }
+}
