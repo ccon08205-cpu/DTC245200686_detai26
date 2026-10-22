@@ -1,0 +1,125 @@
+# ==============================================================================
+# Prometheus Alert Rules - Đề 26: Hệ thống Quản lý Sự kiện
+# 6 luật cảnh báo giám sát toàn diện hệ thống
+# ==============================================================================
+
+groups:
+  - name: eventify_alerts
+    interval: 15s
+    rules:
+
+      # ------------------------------------------------------------------------
+      # Rule 1: TargetDown - Cảnh báo khi bất kỳ target nào ngừng phản hồi
+      # Kích hoạt: Target không trả metrics trong 1 phút
+      # ------------------------------------------------------------------------
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Target {{ $labels.job }} ({{ $labels.instance }}) đã ngừng hoạt động"
+          description: >
+            Job '{{ $labels.job }}' tại instance '{{ $labels.instance }}' không phản hồi
+            trong hơn 1 phút. Kiểm tra container và logs ngay lập tức.
+          runbook_url: "https://github.com/detai26/runbooks/target-down"
+
+      # ------------------------------------------------------------------------
+      # Rule 2: PostgresDown - Cảnh báo khi PostgreSQL exporter mất kết nối DB
+      # Kích hoạt: pg_up == 0 trong 30 giây
+      # ------------------------------------------------------------------------
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: dba
+        annotations:
+          summary: "PostgreSQL database đã ngắt kết nối"
+          description: >
+            Postgres Exporter không thể kết nối tới PostgreSQL tại '{{ $labels.instance }}'.
+            Dịch vụ cơ sở dữ liệu có thể đã dừng hoặc bị lỗi xác thực.
+          runbook_url: "https://github.com/detai26/runbooks/postgres-down"
+
+      # ------------------------------------------------------------------------
+      # Rule 3: NginxDown - Cảnh báo khi Nginx không còn cung cấp metrics
+      # Kích hoạt: nginx-exporter target mất trong 1 phút
+      # ------------------------------------------------------------------------
+      - alert: NginxDown
+        expr: up{job="nginx"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Nginx Reverse Proxy đã ngừng hoạt động"
+          description: >
+            Nginx Exporter không thể thu thập metrics từ stub_status của Nginx.
+            Reverse proxy có thể đã dừng - toàn bộ traffic tới hệ thống bị gián đoạn.
+          runbook_url: "https://github.com/detai26/runbooks/nginx-down"
+
+      # ------------------------------------------------------------------------
+      # Rule 4: BackendHighErrorRate - Tỷ lệ lỗi HTTP 5xx cao bất thường
+      # Kích hoạt: > 5% requests là 5xx trong 5 phút liên tiếp
+      # ------------------------------------------------------------------------
+      - alert: BackendHighErrorRate
+        expr: >
+          (
+            sum(rate(http_requests_total{job="eventify-backend", status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="eventify-backend"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Backend có tỷ lệ lỗi HTTP 5xx cao ({{ $value | humanizePercentage }})"
+          description: >
+            Tỷ lệ lỗi HTTP 5xx của Backend đạt {{ $value | humanizePercentage }}
+            trong 5 phút qua (ngưỡng: 5%). Có thể do lỗi ứng dụng hoặc DB quá tải.
+          runbook_url: "https://github.com/detai26/runbooks/backend-high-error-rate"
+
+      # ------------------------------------------------------------------------
+      # Rule 5: BackendSlowResponses - Thời gian phản hồi p95 vượt ngưỡng
+      # Kích hoạt: p95 latency > 2 giây trong 5 phút liên tiếp
+      # ------------------------------------------------------------------------
+      - alert: BackendSlowResponses
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="eventify-backend"}[5m]))
+            by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Backend phản hồi chậm - p95 latency = {{ $value | humanizeDuration }}"
+          description: >
+            Phần trăm thứ 95 (p95) thời gian phản hồi của Backend là {{ $value | humanizeDuration }},
+            vượt ngưỡng 2 giây trong 5 phút. Kiểm tra slow queries hoặc bottleneck.
+          runbook_url: "https://github.com/detai26/runbooks/backend-slow-responses"
+
+      # ------------------------------------------------------------------------
+      # Rule 6: ContainerMemoryNearLimit - Container sắp hết bộ nhớ
+      # Kích hoạt: RAM sử dụng > 85% giới hạn trong 5 phút
+      # ------------------------------------------------------------------------
+      - alert: ContainerMemoryNearLimit
+        expr: >
+          (
+            container_memory_working_set_bytes{name!="", name!~".*cadvisor.*"}
+            /
+            container_spec_memory_limit_bytes{name!="", name!~".*cadvisor.*"}
+          ) > 0.85 and (container_spec_memory_limit_bytes{name!="", name!~".*cadvisor.*"} > 0)
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Container {{ $labels.name }} sắp hết bộ nhớ ({{ $value | humanizePercentage }})"
+          description: >
+            Container '{{ $labels.name }}' đang sử dụng {{ $value | humanizePercentage }}
+            bộ nhớ giới hạn trong 5 phút. Nguy cơ OOMKilled nếu không can thiệp.
+          runbook_url: "https://github.com/detai26/runbooks/container-memory-near-limit"

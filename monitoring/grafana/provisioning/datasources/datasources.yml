@@ -1,15 +1,30 @@
+# ==============================================================================
+# Grafana Datasource Provisioning - Đề 26: Hệ thống Quản lý Sự kiện
+# Tự động nạp datasource khi Grafana khởi động
+# ==============================================================================
+
 apiVersion: 1
 
+deleteDatasources:
+  - name: Loki
+    orgId: 1
+
 datasources:
+  # ----------------------------------------------------------------------------
+  # Prometheus - Datasource mặc định cho toàn bộ monitoring dashboard
+  # ----------------------------------------------------------------------------
   - name: Prometheus
     type: prometheus
+    uid: prometheus_ds
     access: proxy
     url: http://prometheus:9090
     isDefault: true
     editable: false
-
-  - name: Loki
-    type: loki
-    access: proxy
-    url: http://loki:3100
-    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+      prometheusType: Prometheus
+      prometheusVersion: "3.13.4"
+      cacheLevel: "High"
+      disableRecordingRules: false
+      incrementalQueryOverlap: "10m"

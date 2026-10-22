@@ -1,6 +1,7 @@
 # ==============================================================================
 # Docker Compose Orchestration - Đề 26: Hệ thống Quản lý Sự kiện
 # Kiến trúc 2 mạng phân tách (app & edge), Non-root Nginx & Node, SSL Termination
+# Bao gồm: Prometheus + Grafana + cAdvisor + Postgres-Exporter + Nginx-Exporter
 # ==============================================================================
 
 services:
@@ -105,10 +106,140 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/snippets:/etc/nginx/snippets:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/auth:/etc/nginx/auth:ro
     depends_on:
       - backend
       - frontend
       - pgadmin
+      - grafana
+      - prometheus
+    networks:
+      - edge
+
+  # ============================================================================
+  # MONITORING STACK
+  # ============================================================================
+
+  # ----------------------------------------------------------------------------
+  # 6. Prometheus - Thu thập & lưu trữ metrics (Basic Auth qua Nginx)
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    container_name: eventify_prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.external-url=/prometheus/"
+      - "--web.route-prefix=/"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - app
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # 7. Grafana - Visualize metrics, chạy trên sub-path /grafana/
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:13.2.3
+    container_name: eventify_grafana
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-GrafanaPass123!}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: warn
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cadvisor.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/grafana/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # 8. cAdvisor - Giám sát CPU/RAM/Mạng theo container
+  # ----------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    container_name: eventify_cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - "--housekeeping_interval=15s"
+      - "--docker_only=true"
+      # accelerator không tồn tại trong v0.55.1 - chỉ dùng các metric hợp lệ
+      - "--disable_metrics=advtcp,cpu_topology,cpuset,disk,diskIO,hugetlb,memory_numa,percpu,referenced_memory,resctrl,sched,tcp,udp"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # 9. Postgres Exporter - Xuất metrics PostgreSQL cho Prometheus
+  # ----------------------------------------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    container_name: eventify_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${EXPORTER_DB_USER:-event_exporter}:${EXPORTER_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-eventdb}?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9187/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # 10. Nginx Exporter - Xuất metrics Nginx stub_status cho Prometheus
+  # ----------------------------------------------------------------------------
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.3
+    container_name: eventify_nginx_exporter
+    restart: unless-stopped
+    command:
+      # Port 8081: server block riêng dành cho stub_status (không bị chặn bởi ACL)
+      - "--nginx.scrape-uri=http://nginx:8081/stub_status"
+    depends_on:
+      - nginx
     networks:
       - edge
 
@@ -132,3 +263,7 @@ volumes:
     name: eventify_pgdata
   pgadmin_data:
     name: eventify_pgadmin_data
+  prometheus_data:
+    name: eventify_prometheus_data
+  grafana_data:
+    name: eventify_grafana_data

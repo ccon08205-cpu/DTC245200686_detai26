@@ -1,11 +1,19 @@
+# ==============================================================================
+# Grafana Dashboard Provisioning - Đề 26: Hệ thống Quản lý Sự kiện
+# Tự động nạp dashboard JSON từ thư mục /var/lib/grafana/dashboards
+# ==============================================================================
+
 apiVersion: 1
 
 providers:
-  - name: 'Eventify Dashboards'
+  - name: "Đề 26 - Quản lý Sự kiện"
     orgId: 1
-    folder: 'Event Management 26'
+    folder: "Đề 26 - Quản lý Sự kiện"
+    folderUid: "detai26-eventify"
     type: file
     disableDeletion: false
-    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
     options:
       path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
