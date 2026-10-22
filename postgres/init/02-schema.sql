@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS events (
     organizer_name VARCHAR(150) NOT NULL DEFAULT 'Ban Tổ Chức Đề 26',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_event_dates CHECK (end_time > start_time)
+    CONSTRAINT chk_event_dates CHECK (end_time > start_time),
+    CONSTRAINT no_overlap EXCLUDE USING gist (location WITH =, tstzrange(start_time, end_time) WITH &&)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_status_start ON events(status, start_time);

@@ -1,0 +1,200 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Nhật ký tập trung với Loki & Promtail - 5 truy vấn LogQL chuẩn giám sát Đề 26",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "TỔNG QUAN TRAFFIC THEO TRẠNG THÁI HTTP (LOGQL METRIC QUERY)",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 1 },
+      "type": "timeseries",
+      "title": "Query 4: Thống kê số lượng request Nginx theo status code theo thời gian",
+      "description": "LogQL Metric: sum by (status) (count_over_time({service=\"nginx\"} | json [1m]))",
+      "datasource": { "type": "loki", "uid": "loki_ds" },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki_ds" },
+          "editorMode": "code",
+          "expr": "sum by (status) (count_over_time({service=\"nginx\"} | json | __error__=\"\" [1m]))",
+          "legendFormat": "HTTP {{status}}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "color": { "mode": "palette-classic" },
+          "unit": "req"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "title": "NHẬT KÝ LỖI & SỰ CỐ BẢO MẬT (NGINX / BACKEND / POSTGRES)",
+      "type": "row"
+    },
+    {
+      "id": 2,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 },
+      "type": "logs",
+      "title": "Query 1: Log lỗi Nginx (status >= 400)",
+      "description": "LogQL: {service=\"nginx\"} | json | status >= 400",
+      "datasource": { "type": "loki", "uid": "loki_ds" },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki_ds" },
+          "editorMode": "code",
+          "expr": "{service=\"nginx\"} | json | status >= 400",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 3,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 },
+      "type": "logs",
+      "title": "Query 2: Log yêu cầu đặt vé trùng bị chặn 409",
+      "description": "LogQL: {service=\"backend\"} | json | status=\"409\"",
+      "datasource": { "type": "loki", "uid": "loki_ds" },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki_ds" },
+          "editorMode": "code",
+          "expr": "{service=\"backend\"} | json | status=\"409\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 4,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 20 },
+      "type": "logs",
+      "title": "Query 3: Log CSDL vi phạm ràng buộc exclusion (no_overlap)",
+      "description": "LogQL: {service=\"postgres\"} |= \"no_overlap\"",
+      "datasource": { "type": "loki", "uid": "loki_ds" },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki_ds" },
+          "editorMode": "code",
+          "expr": "{service=\"postgres\"} |= \"no_overlap\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 5,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 20 },
+      "type": "logs",
+      "title": "Query 5: Truy vết request theo request_id qua Nginx và Backend",
+      "description": "LogQL: {service=~\"nginx|backend\"} |= \"$request_id\"",
+      "datasource": { "type": "loki", "uid": "loki_ds" },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki_ds" },
+          "editorMode": "code",
+          "expr": "{service=~\"nginx|backend\"} |= \"$request_id\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["logs", "loki", "promtail", "detai26", "audit"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "value": "" },
+        "description": "Nhập mã request_id để truy vết luồng xử lý qua Nginx & Backend",
+        "hide": 0,
+        "label": "Request ID",
+        "name": "request_id",
+        "options": [],
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+  },
+  "timezone": "browser",
+  "title": "Nhật ký tập trung (Loki) - Đề 26",
+  "uid": "detai26-loki",
+  "version": 1
+}

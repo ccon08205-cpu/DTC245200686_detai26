@@ -1,7 +1,8 @@
 # ==============================================================================
 # Docker Compose Orchestration - Đề 26: Hệ thống Quản lý Sự kiện
-# Kiến trúc 2 mạng phân tách (app & edge), Non-root Nginx & Node, SSL Termination
-# Bao gồm: Prometheus + Grafana + cAdvisor + Postgres-Exporter + Nginx-Exporter
+# Kiến trúc 4 mạng phân tách (edge, app, monitor, egress)
+# Hardening bảo mật cao cấp: Non-root, Read-only, Cap-drop ALL, Resource Limits
+# Giám sát toàn diện: Prometheus + Grafana + Loki + Promtail + cAdvisor + Exporters
 # ==============================================================================
 
 services:
@@ -12,6 +13,13 @@ services:
     image: postgres:17-alpine
     container_name: eventify_postgres
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-eventdb}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -40,6 +48,18 @@ services:
       dockerfile: Dockerfile
     container_name: eventify_backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
@@ -57,6 +77,7 @@ services:
     networks:
       - app
       - edge
+      - monitor
 
   # ----------------------------------------------------------------------------
   # 3. Dịch vụ Frontend (React Vite + Nginx Unprivileged Alpine)
@@ -67,6 +88,20 @@ services:
       dockerfile: Dockerfile
     container_name: eventify_frontend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+      - /var/run:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     networks:
       - edge
 
@@ -77,6 +112,13 @@ services:
     image: dpage/pgadmin4:latest
     container_name: eventify_pgadmin
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@eventify26.local}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-AdminPass123!}
@@ -94,11 +136,26 @@ services:
 
   # ----------------------------------------------------------------------------
   # 5. Reverse Proxy & SSL Termination Nginx (Non-root user UID 101)
+  # CHỈ DUY NHẤT DỊCH VỤ NÀY ĐƯỢC PUBLISH PORT RA NGOÀI MÁY CHỦ (80, 443)
   # ----------------------------------------------------------------------------
   nginx:
     image: nginxinc/nginx-unprivileged:alpine
     container_name: eventify_nginx
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/run:rw,noexec,nosuid,size=16m
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     ports:
       - "80:8080"
       - "443:8443"
@@ -115,18 +172,29 @@ services:
       - prometheus
     networks:
       - edge
+      - monitor
 
   # ============================================================================
-  # MONITORING STACK
+  # MONITORING & LOGGING STACK
   # ============================================================================
 
   # ----------------------------------------------------------------------------
-  # 6. Prometheus - Thu thập & lưu trữ metrics (Basic Auth qua Nginx)
+  # 6. Prometheus - Thu thập & lưu trữ metrics (Basic Auth bảo vệ qua Nginx)
   # ----------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v3.13.4
     container_name: eventify_prometheus
     restart: unless-stopped
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -141,7 +209,7 @@ services:
       - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     networks:
-      - app
+      - monitor
       - edge
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
@@ -150,12 +218,22 @@ services:
       retries: 3
 
   # ----------------------------------------------------------------------------
-  # 7. Grafana - Visualize metrics, chạy trên sub-path /grafana/
+  # 7. Grafana - Visualize metrics & logs, chạy trên sub-path /grafana/
   # ----------------------------------------------------------------------------
   grafana:
     image: grafana/grafana:13.2.3
     container_name: eventify_grafana
     restart: unless-stopped
+    user: "472:472"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
     environment:
       GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
@@ -172,7 +250,9 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+      - loki
     networks:
+      - monitor
       - edge
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/grafana/api/health"]
@@ -181,17 +261,21 @@ services:
       retries: 3
 
   # ----------------------------------------------------------------------------
-  # 8. cAdvisor - Giám sát CPU/RAM/Mạng theo container
+  # 8. cAdvisor - Giám sát CPU/RAM/Mạng theo container Docker
   # ----------------------------------------------------------------------------
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.55.1
     container_name: eventify_cadvisor
     restart: unless-stopped
     privileged: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     command:
       - "--housekeeping_interval=15s"
       - "--docker_only=true"
-      # accelerator không tồn tại trong v0.55.1 - chỉ dùng các metric hợp lệ
       - "--disable_metrics=advtcp,cpu_topology,cpuset,disk,diskIO,hugetlb,memory_numa,percpu,referenced_memory,resctrl,sched,tcp,udp"
     volumes:
       - /:/rootfs:ro
@@ -200,7 +284,7 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     networks:
-      - app
+      - monitor
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
       interval: 15s
@@ -214,6 +298,18 @@ services:
     image: prometheuscommunity/postgres-exporter:v0.20.1
     container_name: eventify_postgres_exporter
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
     environment:
       DATA_SOURCE_NAME: "postgresql://${EXPORTER_DB_USER:-event_exporter}:${EXPORTER_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-eventdb}?sslmode=disable"
       PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
@@ -222,6 +318,7 @@ services:
         condition: service_healthy
     networks:
       - app
+      - monitor
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9187/metrics"]
       interval: 15s
@@ -235,28 +332,100 @@ services:
     image: nginx/nginx-prometheus-exporter:1.5.3
     container_name: eventify_nginx_exporter
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
     command:
-      # Port 8081: server block riêng dành cho stub_status (không bị chặn bởi ACL)
       - "--nginx.scrape-uri=http://nginx:8081/stub_status"
     depends_on:
       - nginx
     networks:
       - edge
+      - monitor
+
+  # ----------------------------------------------------------------------------
+  # 11. Loki - Lưu trữ và đánh chỉ mục Log tập trung (Lưu trữ 7 ngày)
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.6.17
+    container_name: eventify_loki
+    restart: unless-stopped
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - monitor
+
+  # ----------------------------------------------------------------------------
+  # 12. Promtail - Thu thập Docker JSON Log ở chế độ Read-Only và chuyển tiếp tới Loki
+  # ----------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:3.6.11
+    container_name: eventify_promtail
+    restart: unless-stopped
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    command:
+      - "-config.file=/etc/promtail/promtail-config.yml"
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - monitor
 
 # ==============================================================================
-# Phân chia Network & Volumes
+# Phân chia 4 Mạng Cách Ly & Volumes Lưu Trữ Bền Vững
 # ==============================================================================
 networks:
-  # Mạng ingress bên ngoài cho Nginx tiếp nhận và định tuyến tới Frontend/Backend/pgAdmin
+  # 1. Mạng edge: Ingress công khai cho Nginx tiếp nhận traffic (publish 80/443)
   edge:
     name: eventify_edge
     driver: bridge
 
-  # Mạng nội bộ cách ly an toàn cho PostgreSQL và Backend kết nối trực tiếp
+  # 2. Mạng app: Mạng nội bộ cách ly an toàn tuyệt đối cho Postgres & Backend
   app:
     name: eventify_app
     driver: bridge
     internal: true
+
+  # 3. Mạng monitor: Mạng giám sát nội bộ cách ly cho Prometheus/Grafana/Loki/Exporters
+  monitor:
+    name: eventify_monitor
+    driver: bridge
+    internal: true
+
+  # 4. Mạng egress: Mạng dành cho các luồng kết nối ngoại vi (External outbound traffic)
+  egress:
+    name: eventify_egress
+    driver: bridge
 
 volumes:
   pgdata:
@@ -267,3 +436,5 @@ volumes:
     name: eventify_prometheus_data
   grafana_data:
     name: eventify_grafana_data
+  loki_data:
+    name: eventify_loki_data

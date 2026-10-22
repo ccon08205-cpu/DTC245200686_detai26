@@ -1,10 +1,10 @@
 # Đề 26: Hệ thống Quản lý Sự kiện / Event (Website tổ chức sự kiện, đăng ký tham dự, vé)
 
-Hệ thống Quản lý Sự kiện & Đăng ký Vé trực tuyến chuẩn doanh nghiệp, xây dựng theo kiến trúc Microservices phân tách mạng đa tầng (Edge & App), bảo mật cao với HTTPS TLS tự ký, Nginx Unprivileged (Non-root), cơ sở dữ liệu PostgreSQL 17 và giám sát hệ thống thời gian thực với Prometheus & Grafana.
+Hệ thống Quản lý Sự kiện & Đăng ký Vé trực tuyến chuẩn Production, xây dựng theo kiến trúc Microservices phân tách 4 mạng nội bộ độc lập (`edge`, `app`, `monitor`, `egress`), áp dụng triệt để các tiêu chuẩn **Gia cố bảo mật hệ thống (Hardening)** và tích hợp hệ sinh thái **Giám sát & Quản lý Nhật ký tập trung (Prometheus + Grafana + Loki + Promtail + cAdvisor + Exporters)**.
 
 ---
 
-## 🏗️ Kiến trúc Tổng thể Dự án
+## 🏗️ Kiến trúc Mạng & Dịch vụ Tổng thể
 
 ```
                              [ TRÌNH DUYỆT / CLIENT ]
@@ -16,143 +16,191 @@ Hệ thống Quản lý Sự kiện & Đăng ký Vé trực tuyến chuẩn doan
       │                                                                   │
       │   ┌───────────────────────────────────────────────────────────┐   │
       │   │          NGINX REVERSE PROXY (Non-root UID 101)           │   │
-      │   │  - SSL Termination (TLS 1.2 / 1.3)                        │   │
-      │   │  - Security Headers (HSTS, CSP, X-Frame-Options, ...)     │   │
+      │   │  - Publish Port Host duy nhất: :80 và :443                │   │
+      │   │  - SSL Termination (TLS 1.2 / 1.3), JSON Access Logging   │   │
+      │   │  - OWASP Security Headers (HSTS, CSP, X-Frame-Options...) │   │
       │   │  - Rate Limiting: 10 req/s, burst=20 chống DoS / Spam     │   │
-      │   └──────────────┬───────────────────┬───────────────────┬────┘   │
-      │                  │ /                 │ /api/             │ /pgadmin/
-      │                  ▼                   ▼                   ▼        │
-      │   ┌────────────────────────┐  ┌─────────────┐  ┌─────────────┐   │
-      │   │   FRONTEND CONTAINER   │  │   BACKEND   │  │  pgAdmin 4  │   │
-      │   │  (React Vite + Nginx)  │  │  (Node.js)  │  │  (Port 80)  │   │
-      │   └────────────────────────┘  └──────┬──────┘  └──────┬──────┘   │
-      └──────────────────────────────────────┼────────────────┼───────────┘
-                                             │                │
-      ┌──────────────────────────────────────┼────────────────┼───────────┐
-      │                                      ▼                ▼           │
-      │                         POSTGRESQL 17 (Internal: 5432)            │
-      │                       - Schema: events, tickets, attendees,       │
-      │                                 audit_logs                        │
-      │                       - Exclusion & Hard Check Constraints        │
-      │                       - Least-privilege role: event_app           │
+      │   └──┬─────────────┬──────────────┬────────────┬──────────┬───┘   │
+      │      │ /           │ /api/        │ /pgadmin/  │ /grafana/│ /prometheus/
+      │      ▼             ▼              ▼            │          │       │
+      │   ┌──────────┐  ┌──────────┐  ┌──────────┐     │          │       │
+      │   │ FRONTEND │  │ BACKEND  │  │ pgAdmin  │     │          │       │
+      │   │  (React) │  │ (NodeJS) │  │  (Web)   │     │          │       │
+      │   └──────────┘  └──┬───────┘  └──┬───────┘     │          │       │
+      └────────────────────┼─────────────┼─────────────┼──────────┼───────┘
+                           │             │             │          │
+      ┌────────────────────┼─────────────┼─────────────┴──────────┴───────┐
+      │                    │             │                                │
+      │                    │             │   ┌────────────────────────┐   │
+      │                    │             │   │       PROMETHEUS       │   │
+      │                    │             │   │ (Metrics Scrape & Alert)   │
+      │                    │             │   └───────────▲────────────┘   │
+      │                    │             │               │ scrape 15s     │
+      │                    │             │   ┌───────────┴────────────┐   │
+      │                    │             │   │      GRAFANA 13.2      │   │
+      │                    │             │   │ (Dashboards & LogQL)   │   │
+      │                    │             │   └───────────▲────────────┘   │
+      │                    │             │               │ LogQL          │
+      │                    │             │   ┌───────────┴────────────┐   │
+      │                    │             │   │      GRAFANA LOKI      │   │
+      │                    │             │   │ (Lưu trữ Log 7 ngày)   │   │
+      │                    │             │   └───────────▲────────────┘   │
+      │                    │             │               │ push log       │
+      │                    │             │   ┌───────────┴────────────┐   │
+      │                    │             │   │        PROMTAIL        │   │
+      │                    │             │   │ (Docker JSON log ship) │   │
+      │                    │             │   └────────────────────────┘   │
+      │                    │             │                                │
+      │                    ▼             ▼                                │
+      │   ┌───────────────────────────────────────────────────────────┐   │
+      │   │            cAdvisor (gcr.io/cadvisor:v0.55.1)             │   │
+      │   │            Postgres-Exporter + Nginx-Exporter             │   │
+      │   │                                                           │   │
+      │   │                 MẠNG MONITOR (Internal: true)             │   │
+      │   └───────────────────────────────────────────────────────────┘   │
       │                                                                   │
-      │                         MẠNG NỘI BỘ APP (Isolated)                │
+      └───────────────────────────────────┬───────────────────────────────┘
+                                          │
+      ┌───────────────────────────────────┴───────────────────────────────┐
+      │                                   ▼                               │
+      │                      POSTGRESQL 17 (Internal)                     │
+      │                    - DB: eventdb (Port 5432 nội bộ)               │
+      │                    - Giới hạn quyền: user event_app               │
+      │                    - Ràng buộc: no_overlap & no_oversell          │
+      │                                                                   │
+      │                      MẠNG APP (Internal: true)                    │
       └───────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📁 Cấu trúc Thư mục Dự án
+## 🌐 Danh bạ Dịch vụ & Cổng Truy cập
 
-```
-.
-├── backend/
-│   ├── Dockerfile                  # Multi-stage Dockerfile chạy với user non-root (node)
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── db.ts                   # PostgreSQL Pool kết nối với user event_app
-│       ├── index.ts                # Express app setup, rate-limiting & graceful shutdown
-│       ├── metrics.ts              # Prometheus prom-client (Counter, Histogram, Gauge)
-│       └── routes/
-│           ├── admin.ts            # Quản trị viên (Overview stats, attendees, audit logs)
-│           ├── events.ts           # Danh sách sự kiện & Chi tiết sự kiện
-│           ├── health.ts           # Endpoint kiểm tra trạng thái /health
-│           └── tickets.ts          # Đăng ký vé (Idempotency, Row-level Lock) & Tra cứu
-├── frontend/
-│   ├── Dockerfile                  # Multi-stage build React -> Nginx Unprivileged
-│   ├── nginx.conf                  # Nginx nội bộ phục vụ static file SPA
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── index.html
-│   └── src/
-│       ├── App.jsx                 # Giao diện chính: Khám phá, Đăng ký vé, Tra cứu, Admin
-│       ├── index.css               # Hệ thống Style Glassmorphism & Dark Mode cao cấp
-│       └── main.jsx
-├── monitoring/
-│   ├── grafana/
-│   │   └── provisioning/
-│   │       ├── dashboards/dashboards.yml
-│   │       └── datasources/datasources.yml
-│   ├── loki/
-│   │   └── loki-config.yml
-│   ├── prometheus/
-│   │   └── prometheus.yml          # Scrape cấu hình backend:3000/metrics
-│   └── promtail/
-│       └── promtail-config.yml
-├── nginx/
-│   ├── certs/                      # Thư mục chứa SSL cert & private key (server.crt, server.key)
-│   ├── snippets/
-│   │   └── security-headers.conf   # HSTS, CSP, X-Frame-Options, X-Content-Type-Options
-│   └── nginx.conf                  # Nginx Reverse Proxy chính chạy non-root
-├── postgres/
-│   ├── init/
-│   │   ├── 01-init-roles.sh        # Khởi tạo role event_app và pg_exporter (Least Privilege)
-│   │   └── 02-schema.sql           # Schema DDL, Constraints, Triggers và Seed Data
-│   └── pgadmin/
-│       └── servers.json            # Cấu hình tự động kết nối PostgreSQL cho pgAdmin 4
-├── scripts/
-│   ├── gen-cert.sh                 # Sinh chứng chỉ SSL tự ký có SAN (Subject Alternative Names)
-│   ├── gen-env.sh                  # Sinh .env ngẫu nhiên với mật khẩu mạnh
-│   └── gen-htpasswd.sh             # Sinh tệp xác thực Basic Auth
-├── .gitignore                      # Loại trừ .env, certs key, node_modules, logs
-├── docker-compose.yml              # Quản lý 5 dịch vụ phân tách 2 mạng
-└── README.md
-```
+> [!NOTE]
+> Hệ thống áp dụng **Network Isolation tuyệt đối**: Chỉ duy nhất **Nginx** mở cổng ra máy chủ host (`:80` và `:443`). Mọi dịch vụ khác giao tiếp qua mạng Docker Bridge nội bộ.
+
+| Dịch vụ | URL Truy cập (Ngoại vi) | Cổng Nội bộ | Tài khoản / Quyền |
+| :--- | :--- | :--- | :--- |
+| **Giao diện Người dùng (React SPA)** | `https://localhost/` | `frontend:8080` | Công khai |
+| **Tự động chuyển hướng HTTP** | `http://localhost/` | `nginx:8080` -> `301` | Chuyển sang HTTPS |
+| **REST API Backend** | `https://localhost/api/events` | `backend:3000` | Công khai / Token |
+| **Đăng ký vé (Idempotency)** | `POST https://localhost/api/tickets/register` | `backend:3000` | Header `Idempotency-Key` |
+| **Health Check Hệ thống** | `https://localhost/health` | `backend:3000` | Công khai (`healthy: true`) |
+| **Prometheus Web UI & API** | `https://localhost/prometheus/` | `prometheus:9090` | Basic Auth: `prometheus` / `PrometheusSecurePass2026!` |
+| **Grafana Dashboards** | `https://localhost/grafana/` | `grafana:3000` | Admin: `admin` / `BwsnezwYz8Dywdp5mN8qR4tV` |
+| **Quản trị CSDL pgAdmin 4** | `https://localhost/pgadmin/` | `pgadmin:80` | `admin@eventify26.com` / `yHEzp6fI0OmzBvoQ9kL2xP5w` |
+| **Loki Log Gateway** | Nội bộ qua Grafana Datasource | `loki:3100` | Internal network `monitor` |
 
 ---
 
-## 🚀 Hướng dẫn Triển khai & Khởi chạy Nhanh
+## 🚀 Hướng dẫn Triển khai & Vận hành
 
-### Bước 1: Sinh Môi trường và Chứng chỉ SSL
+### 1. Sinh Chứng chỉ SSL & Môi trường Bí mật
 ```bash
-# 1. Sinh file .env với mật khẩu ngẫu nhiên bảo mật cao
-./scripts/gen-env.sh
-
-# 2. Sinh chứng chỉ SSL tự ký cho localhost / eventify26.local
+# 1. Sinh chứng chỉ SSL tự ký có Subject Alternative Name (SAN: localhost, 127.0.0.1, eventify26.local)
 ./scripts/gen-cert.sh
+
+# 2. Sinh mật khẩu ngẫu nhiên >= 24 ký tự vào .env
+./scripts/gen-env.sh
 ```
 
-### Bước 2: Khởi chạy toàn bộ hệ thống bằng Docker Compose
+### 2. Khởi chạy toàn bộ hệ thống bằng Docker Compose
 ```bash
 docker compose up -d --build
 ```
 
-### Bước 3: Kiểm tra trạng thái dịch vụ
+### 3. Kiểm tra trạng thái 12 Containers
 ```bash
 docker compose ps
 ```
 
----
-
-## 🌐 Các Đường dẫn Truy cập
-
-| Dịch vụ | Giao thức & Cổng | Mô tả |
-| :--- | :--- | :--- |
-| **Trang chủ Website** | `https://localhost/` | Giao diện React: Khám phá sự kiện, Đặt vé, Tra cứu vé, Admin |
-| **Chuyển hướng HTTP** | `http://localhost/` | Tự động chuyển hướng mã 301 sang `https://localhost/` |
-| **API Danh sách Sự kiện** | `https://localhost/api/events` | REST API trả về danh sách sự kiện và giá vé |
-| **API Tra cứu Vé** | `https://localhost/api/tickets/lookup?code=EVT-26-DEMO01` | Tra cứu chi tiết vé theo mã hoặc số điện thoại |
-| **Health Check API** | `https://localhost/health` | Kiểm tra trạng thái máy chủ và kết nối database |
-| **Prometheus Metrics** | `https://localhost/metrics` | Xuất số liệu chuẩn prom-client cho hệ thống giám sát |
-| **pgAdmin 4 Web** | `https://localhost/pgadmin/` | Quản trị CSDL trực quan (kết nối sẵn đến Postgres) |
+Tất cả container đều phải đạt trạng thái `Up (healthy)` hoặc `Up`.
 
 ---
 
-## 🔒 Các Tính năng Kỹ thuật & Bảo mật Nổi bật
+## 📊 Hệ thống Nhật ký tập trung Loki & 5 Truy vấn LogQL
 
-1. **Chống Over-selling (Bán vượt quá số lượng vé) ở 2 tầng:**
-   - **Tầng Ứng dụng:** Sử dụng câu lệnh `SELECT ... FOR UPDATE` trong Transaction để khóa dòng bản ghi loại vé, ngăn chặn race condition khi nhiều người cùng đặt vé một lúc.
-   - **Tầng Cơ sở Dữ liệu:** Ràng buộc cứng `CONSTRAINT chk_no_oversell CHECK (quantity_sold <= quantity_total)`.
-2. **Cơ chế Idempotency chống gửi trùng lặp:**
-   - Client gửi kèm Header `Idempotency-Key`.
-   - Nếu xảy ra timeout hoặc retry mạng, hệ thống kiểm tra và trả lại kết quả cũ mà không tạo thêm vé trùng lặp.
-3. **Chống Spam vé:**
-   - Ràng buộc `UNIQUE (event_id, phone)` đảm bảo mỗi số điện thoại chỉ đăng ký 1 vé cho mỗi sự kiện.
-4. **Phân tách 2 Mạng Nội bộ (Network Segmentation):**
-   - Mạng `edge`: Nginx tiếp nhận request bên ngoài và chuyển đến frontend/backend.
-   - Mạng `app`: Mạng nội bộ cách ly, PostgreSQL không mở bất kỳ cổng nào ra máy host.
-5. **Quyền hạn chế tối đa (Least Privilege):**
-   - Backend kết nối qua user `event_app` (không dùng superuser `postgres`).
-   - Nginx chạy container `nginx-unprivileged` với UID 101.
-   - Backend chạy dưới user `node` (UID 1000).
+Log từ tất cả container được Docker ghi dạng `json-file`, Promtail thu thập theo chế độ **Read-Only** (`/var/lib/docker/containers:ro`), gắn nhãn metadata (`service`, `container`, `project`) và đẩy về Loki lưu trữ tối đa **7 ngày** (168 giờ).
+
+Dashboard **"Nhật ký tập trung (Loki) - Đề 26"** đã được cấu hình tự động (Provisioning) trong Grafana với sẵn 5 câu truy vấn LogQL nghiệp vụ:
+
+| STT | Tên mục tiêu | Câu truy vấn LogQL | Ý nghĩa & Ứng dụng |
+| :---: | :--- | :--- | :--- |
+| **1** | **Log lỗi Nginx** | `{service="nginx"} \| json \| status >= 400` | Lọc tức thời mọi request bị lỗi Client (4xx) hoặc Server (5xx) từ Nginx. |
+| **2** | **Log đặt vé trùng bị chặn 409** | `{service="backend"} \| json \| status="409"` | Phát hiện người dùng cố tình hoặc vô ý dùng lại số điện thoại đã mua vé cho cùng sự kiện. |
+| **3** | **CSDL vi phạm ràng buộc exclusion** | `{service="postgres"} \|= "no_overlap"` | Giám sát các giao dịch thêm sự kiện bị PostgreSQL chặn do trùng địa điểm và khung giờ (`no_overlap`). |
+| **4** | **Thống kê request Nginx theo thời gian** | `sum by (status) (count_over_time({service="nginx"} \| json \| __error__="" [1m]))` | Vẽ biểu đồ Time-series phân bố số lượng request theo mã trạng thái HTTP (200, 404, 409, 500...). |
+| **5** | **Truy vết request theo request_id** | `{service=~"nginx\|backend"} \|= "$request_id"` | Truy vết xuyên suốt (End-to-End Tracing) một request cụ thể đi từ Nginx Reverse Proxy vào Backend Express. |
+
+### Lệnh cURL kiểm chứng trực tiếp từng câu truy vấn LogQL:
+
+```bash
+# Query 1: Lỗi Nginx status >= 400
+docker exec eventify_prometheus wget -qO- 'http://loki:3100/loki/api/v1/query_range?query=%7Bservice%3D%22nginx%22%7D%20%7C%20json%20%7C%20status%20%3E%3D%20400&limit=5' | jq .data.result
+
+# Query 2: Lỗi đặt vé trùng 409 từ Backend
+docker exec eventify_prometheus wget -qO- 'http://loki:3100/loki/api/v1/query_range?query=%7Bservice%3D%22backend%22%7D%20%7C%20json%20%7C%20status%3D%22409%22&limit=5' | jq .data.result
+
+# Query 3: Vi phạm exclusion constraint no_overlap trên Postgres
+docker exec eventify_prometheus wget -qO- 'http://loki:3100/loki/api/v1/query_range?query=%7Bservice%3D%22postgres%22%7D%20%7C%3D%20%22no_overlap%22&limit=5' | jq .data.result
+
+# Query 4: Thống kê request theo status code
+docker exec eventify_prometheus wget -qO- 'http://loki:3100/loki/api/v1/query_range?query=sum%20by%20(status)%20(count_over_time(%7Bservice%3D%22nginx%22%7D%20%7C%20json%20%7C%20__error__%3D%22%22%20%5B5m%5D))' | jq .data.result
+
+# Query 5: Truy vết theo mã Request-ID
+docker exec eventify_prometheus wget -qO- 'http://loki:3100/loki/api/v1/query_range?query=%7Bservice%3D~%22nginx%7Cbackend%22%7D%20%7C%3D%20%22<MA_REQUEST_ID>%22' | jq .data.result
+```
+
+---
+
+## 🛡️ Bảng Tổng hợp Biện pháp Hardening & Lệnh Kiểm chứng
+
+Hệ thống được gia cố toàn diện ở 6 lớp bảo mật theo khuyến nghị CIS Docker Benchmark và OWASP Top 10:
+
+| Lớp bảo mật | Biện pháp Hardening áp dụng | Dịch vụ thực hiện | Lệnh kiểm chứng | Kết quả mong đợi |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Non-root Execution** | Chạy container bằng user không đặc quyền (`node`, `nginx`, `postgres`, `nobody:65534`, `472:472`, `10001:10001`). | Toàn bộ backend, frontend, nginx, postgres, prometheus, grafana, loki. | `docker inspect eventify_nginx --format 'UID: {{.Config.User}}'`<br>`docker inspect eventify_prometheus --format 'User: {{.Config.User}}'` | Không trả về root (`""` hoặc `101`, `65534:65534`, `472:472`, `10001:10001`). |
+| **2. Network Isolation** | Tạo 4 mạng riêng biệt (`edge`, `app`, `monitor`, `egress`). Chỉ duy nhất Nginx publish cổng host. | Nginx mở `80, 443`. PostgreSQL, Exporters, Prometheus, Loki cách ly mạng nội bộ (`internal: true`). | `docker network ls \| grep eventify`<br>`docker inspect eventify_postgres --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'` | Hiện 4 mạng `eventify_*`. Postgres chỉ thuộc mạng `eventify_app`. |
+| **3. Security Headers** | Thiết lập HSTS (`preload`), CSP chặt chẽ, X-Frame-Options (`SAMEORIGIN`), X-Content-Type-Options (`nosniff`), Referrer-Policy, tắt `server_tokens`. | Nginx Reverse Proxy (`nginx/snippets/security-headers.conf`). | `curl -skI https://localhost/` | Trả về đủ các header bảo mật, không để lộ phiên bản Nginx (`Server: nginx`). |
+| **4. Resource Limits** | Giới hạn CPU (`cpus`) và bộ nhớ RAM (`memory`) trong `deploy.resources.limits` chống tấn công cạn kiệt tài nguyên (DoS/OOM). | Toàn bộ 12 container trong `docker-compose.yml`. | `docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.MemLimit}}"` | Hiển thị trần CPU/RAM cố định (ví dụ trần 512MiB cho Backend/Postgres). |
+| **5. Privilege Restrictions** | Bật `no-new-privileges:true`, thu hồi toàn bộ Linux Capabilities (`cap_drop: [ALL]`), kích hoạt `read_only: true` kèm `tmpfs`. | Backend, Frontend, Nginx, Prometheus, Grafana, Loki, Exporters. | `docker inspect eventify_backend --format 'ReadOnly: {{.HostConfig.ReadonlyRootfs}}, SecOpt: {{.HostConfig.SecurityOpt}}, CapDrop: {{.HostConfig.CapDrop}}'` | `ReadOnly: true`, `SecOpt: [no-new-privileges:true]`, `CapDrop: [ALL]`. |
+| **6. Secret Management** | Sinh mật khẩu ngẫu nhiên bảo mật cao độ dài ≥ 24 ký tự. Đưa `.env`, SSL private key, `.htpasswd*` vào `.gitignore`. | `.env`, `nginx/certs/`, `nginx/auth/`. | `git status --ignored`<br>`wc -c <(grep PASSWORD .env)` | Không có tệp bí mật nào bị theo dõi bởi Git. Mọi mật khẩu đều ≥ 24 ký tự. |
+
+---
+
+## 📈 Giám sát Prometheus Alert Rules
+
+Hệ thống cấu hình 6 luật cảnh báo chuẩn SRE trong `monitoring/prometheus/alerts.yml`:
+
+| Tên Alert | Mức độ | Điều kiện kích hoạt | Xử lý tự động |
+| :--- | :---: | :--- | :--- |
+| **TargetDown** | Critical | `up == 0` trong 1 phút | Báo động khi bất kỳ container nào bị sập hoặc ngừng phản hồi. |
+| **PostgresDown** | Critical | `pg_up == 0` trong 30 giây | Báo động khi DB Postgres ngắt kết nối. |
+| **NginxDown** | Critical | `up{job="nginx"} == 0` trong 1 phút | Báo động khi Reverse Proxy Nginx ngừng hoạt động. |
+| **BackendHighErrorRate** | Warning | Tỉ lệ lỗi HTTP 5xx > 5% trong 5 phút | Phát hiện lỗi code, unhandled exceptions hoặc timeout DB. |
+| **BackendSlowResponses** | Warning | p95 latency > 2s trong 5 phút | Phát hiện suy giảm hiệu năng hoặc câu truy vấn chậm (slow query). |
+| **ContainerMemoryNearLimit** | Warning | RAM container > 85% giới hạn spec trong 5 phút | Cảnh báo trước nguy cơ bị hệ điều hành OOMKilled. |
+
+---
+
+## 🎯 Kiểm thử Nghiệp vụ & Đăng ký Vé
+
+```bash
+# 1. Tra cứu danh sách sự kiện kèm giá vé
+curl -sk https://localhost/api/events | jq .
+
+# 2. Đăng ký vé thành công với Idempotency-Key
+curl -sk -X POST https://localhost/api/tickets/register \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: IDEMP-$(date +%s)" \
+  -d '{
+    "event_id": "00000000-0000-0000-0000-000000000001",
+    "ticket_id": "10000000-0000-0000-0000-000000000001",
+    "full_name": "Trần Thị Bình",
+    "email": "binh.tran@example.com",
+    "phone": "0987654321"
+  }' | jq .
+
+# 3. Tra cứu vé đã phát hành theo số điện thoại hoặc mã vé
+curl -sk "https://localhost/api/tickets/lookup?phone=0987654321" | jq .
+```

@@ -30,9 +30,11 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Middleware giám sát HTTP Metrics cho Prometheus
+// Middleware giám sát HTTP Metrics và Structured JSON Logging
 app.use((req: Request, res: Response, next: NextFunction) => {
   const start = process.hrtime();
+  const requestId = (req.headers['x-request-id'] as string) || `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  res.setHeader('X-Request-Id', requestId);
 
   res.on('finish', () => {
     const diff = process.hrtime(start);
@@ -52,6 +54,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
         status_code: res.statusCode.toString(),
       },
       durationSeconds
+    );
+
+    // Ghi log JSON có cấu trúc phục vụ Promtail/Loki
+    console.log(
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        service: 'backend',
+        request_id: requestId,
+        method: req.method,
+        url: req.originalUrl || req.url,
+        route,
+        status: res.statusCode.toString(),
+        duration_seconds: durationSeconds,
+        ip: req.ip || req.socket.remoteAddress,
+      })
     );
   });
 

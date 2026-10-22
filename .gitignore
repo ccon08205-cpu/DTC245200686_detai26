@@ -18,8 +18,7 @@ build/
 nginx/certs/*.key
 nginx/certs/*.crt
 nginx/certs/*.pem
-!nginx/certs/.gitkeep
-nginx/auth/.htpasswd
+nginx/auth/.htpasswd*
 
 # Database data & logs
 postgres/data/
